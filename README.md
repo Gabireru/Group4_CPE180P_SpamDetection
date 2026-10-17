@@ -3,6 +3,8 @@
 ## Problem and SLAs
 Detect spam SMS messages (binary text classification, UCI SMS Spam Collection).
 SLAs: accuracy >= 90% (enforced in `train.py` and CI), inference latency <= 100 ms (checked per request and in tests).
+Inference Latency SLA <= 100% (checked per request in `app.py` and client verification)
+ONXX Parity >= 99% prediction agreement between `scikit-learn` and `ONNX Runtime`.
 
 ## Architecture
 ```
@@ -21,6 +23,7 @@ Client node (Win11 / Ubuntu WSL)             Server node (Sakura Cloud VM, Ubunt
 | Client / demo | `client.py` (`--drift-demo`) |
 | Container | `Dockerfile`, `requirements.txt` |
 | CI/CD (train -> test -> build -> push -> SSH deploy) | `.github/workflows/ci.yml`, `deploy/` |
+| Virtual Machine Hardening & Deployment | `setup_server.sh, remote_run.sh, deploy.sh, ci.yml` |
 
 ## Quick start
 ```bash
@@ -67,7 +70,9 @@ Needs `models/` to exist (run `train.py` first). Optional environment variables:
 
 Quick check with curl:
 ```bash
-curl -X POST localhost:8000/v1/predict -H "Content-Type: application/json" \
+curl -X POST http://localhost:8000/v1/predict \
+     -H "Content-Type: application/json" \
+     -H "X-API-Key: $API_KEY" \
      -d '{"message": "Free entry! Text WIN to 80085"}'
 ```
 Interactive API docs are at `http://localhost:8000/docs`.
@@ -75,11 +80,11 @@ Interactive API docs are at `http://localhost:8000/docs`.
 ### `client.py`: send requests to the API
 Run it in a second terminal while the API is up.
 ```bash
-export SERVER_URL=http://localhost:8000      # or http://<sakura-vm-ip>:8000
-export API_KEY=<same key as the server>      # only if the server uses one
-python client.py                             # two built-in sample messages
+export SERVER_URL="http://localhost:8000"    # or http://<vm-ip>:8000
+export API_KEY="<same key as the server>"    # read from /etc/spam-api/env
+python client.py                             # runs built-in ham and spam test samples
 python client.py "Free entry! Text WIN to 80085" "see you at lunch"
-python client.py --drift-demo                # 60 out-of-distribution requests to trigger the drift alert
+python client.py --drift-demo                # sends 60 out-of-distribution requests to trigger drift alert
 ```
 Each line prints the label, spam probability, server latency, round-trip time and drift flag.
 On Windows PowerShell, set variables with `$env:SERVER_URL="http://<ip>:8000"`.
@@ -95,14 +100,26 @@ Shared helpers (`normalize`, `msg_features`) imported by `train.py` and `app.py`
 
 ### Docker
 ```bash
-python train.py                                   # the image bundles models/, so train first
-docker build -t spam-api .
-docker run -d --name spam-api -p 8000:8000 -e API_KEY=$API_KEY spam-api
-docker logs -f spam-api                           # live logs (or inside tmux: tmux new -s logs 'docker logs -f spam-api')
-docker rm -f spam-api                             # stop/remove, also fixes port-collision errors
+python train.py                              # generates models/ before building the image
+sudo docker build -t spam-api:latest .
+sudo docker rm -f spam-api 2>/dev/null || true
+sudo docker run -d --name spam-api --restart unless-stopped \
+  -p 8000:8000 --env-file /etc/spam-api/env spam-api:latest
+sudo docker logs -f spam-api                 
 ```
 
-### `deploy/`: Sakura Cloud VM
+### Local Virtual Machine Deployment and WSL Portforwarding
+# 1. Copy setup script to VM and execute as sudo (installs Docker, ufw ports 22 & 8000, fail2ban, SSH hardening, generates API key)
+scp setup_server.sh vboxuser@<vm-ip>:~/
+ssh -t vboxuser@<vm-ip> "chmod +x ~/setup_server.sh && sudo ~/setup_server.sh"
+
+# 2. Retrieve the generated API key for client authentication
+sudo cat /etc/spam-api/env
+
+# 3. Optional WSL-to-VM SSH Port Forwarding (forwards local port 8000 to VM port 8000 over SSH)
+ssh -L 8000:localhost:8000 vboxuser@<vm-ip> -N -f
+
+### `deploy/`: Sakura Cloud VM (OPTIONAL)
 ```bash
 # 1. One-time, on the VM (as sudo): installs Docker, ufw (22 + 8000), fail2ban, SSH hardening, generates the API key
 sudo bash deploy/setup_server.sh
