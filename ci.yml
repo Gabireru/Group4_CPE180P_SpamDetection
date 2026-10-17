@@ -1,0 +1,39 @@
+name: ci-cd
+on:
+  push:
+    branches: [main]
+
+env:
+  IMAGE: ghcr.io/${{ github.repository_owner }}/spam-api
+
+jobs:
+  build-test-deploy:
+    runs-on: ubuntu-latest
+    permissions: { contents: read, packages: write }
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: { python-version: "3.10", cache: pip }
+      - run: pip install -r requirements-dev.txt
+      - name: Train + export ONNX (fails if accuracy < 90%)
+        run: python train.py
+      - name: Automated tests (API, latency SLA, drift)
+        run: pytest -q tests
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Build and push image
+        run: |
+          docker build -t $IMAGE:latest -t $IMAGE:${{ github.sha }} .
+          docker push --all-tags $IMAGE
+      - name: Remote deploy to Sakura Cloud VM
+        env:
+          SSH_KEY: ${{ secrets.SSH_PRIVATE_KEY }}
+          HOST: ${{ secrets.SAKURA_HOST }}
+          USER: ${{ secrets.SAKURA_USER }}
+        run: |
+          install -m 600 /dev/null id_rsa && echo "$SSH_KEY" > id_rsa
+          ssh -i id_rsa -o StrictHostKeyChecking=accept-new $USER@$HOST \
+            "IMAGE=$IMAGE bash -s" < deploy/remote_run.sh
