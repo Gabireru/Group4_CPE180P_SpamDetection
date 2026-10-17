@@ -1,0 +1,15 @@
+__pycache__/
+*.py[cod]
+.env
+secrets/
+id_rsa*
+venv/
+project/
+EOFcat << 'EOF' > .gitignore
+__pycache__/
+*.py[cod]
+.env
+secrets/
+id_rsa*
+venv/
+project/
