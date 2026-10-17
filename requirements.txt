@@ -1,0 +1,9 @@
+scikit-learn
+pandas
+onnx
+skl2onnx
+onnxruntime
+fastapi
+httpx
+pytest
+requests
